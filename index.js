@@ -42,13 +42,23 @@ const readChunk = (descriptor, buffer, start, length) =>
 
 // go!
 fs.stat(FILE, (error, stat) => {
-	const { size } = stat
-	const chunks = Math.floor(stat.size / CHUNK_SIZE)
+	const chunks = Math.ceil(stat.size / CHUNK_SIZE)
 	fs.open(FILE, 'r', async (error, descriptor) => {
 		const buffer = Buffer.alloc(CHUNK_SIZE)
 		for (let i = 0; i < chunks; i++) {
-			await readChunk(descriptor, buffer, i * CHUNK_SIZE, CHUNK_SIZE)
-			print(buffer, i * CHUNK_SIZE)
+			if ((i + 1) * CHUNK_SIZE <= stat.size) {
+				await readChunk(descriptor, buffer, i * CHUNK_SIZE, CHUNK_SIZE)
+				print(buffer, i * CHUNK_SIZE)
+			} else {
+				const buffer = Buffer.alloc(stat.size - i * CHUNK_SIZE)
+				await readChunk(
+					descriptor,
+					buffer,
+					i * CHUNK_SIZE,
+					stat.size - i * CHUNK_SIZE
+				)
+				print(buffer, i * CHUNK_SIZE)
+			}
 		}
 	})
 })
