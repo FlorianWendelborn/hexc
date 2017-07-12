@@ -4,9 +4,9 @@ const fs = require('fs')
 const hsl2rgb = require('pure-color/convert/hsl2rgb')
 
 // config
-const WIDTH = Math.floor(process.stdout.columns / 2) - 5
+const CHUNK_SIZE = 2 ** 16
 const FILE = process.argv[2]
-const CHUNK_SIZE = 1024
+const WIDTH = Math.floor((process.stdout.columns - 9) / 2)
 
 // create lookup table
 const colorHexTable = (() => {
@@ -21,39 +21,54 @@ const colorHexTable = (() => {
 	return result
 })()
 
-// helper
-const address = offset =>
+/**
+ * @description prints the offset as hexadecimal with fixed length
+ * @param {Integer} offset address to print
+ */
+const address = address =>
 	[
-		(offset & 0xf0000000) >> 28,
-		(offset & 0x0f000000) >> 24,
-		(offset & 0x00f00000) >> 20,
-		(offset & 0x000f0000) >> 16,
-		(offset & 0x0000f000) >> 12,
-		(offset & 0x00000f00) >> 8,
-		(offset & 0x000000f0) >> 4,
-		offset & 0x0000000f
+		(address & 0xf0000000) >> 28,
+		(address & 0x0f000000) >> 24,
+		(address & 0x00f00000) >> 20,
+		(address & 0x000f0000) >> 16,
+		(address & 0x0000f000) >> 12,
+		(address & 0x00000f00) >> 8,
+		(address & 0x000000f0) >> 4,
+		(address & 0x0000000f) >> 0
 	]
 		.map(i => i.toString(16))
 		.join('')
 		.toUpperCase()
 
-// helper
-const print = (buffer, offset) => {
+/**
+ * @description prints a chunk
+ * @param {Buffer} buffer buffer to print
+ * @param {Integer} offset buffer offset compared to file
+ */
+const printChunk = (buffer, offset) => {
 	const toPrint = []
 	for (let i = 0; i < buffer.length; i++) {
 		const position = offset + i
 		const mod = position % WIDTH
+		const isFirst = mod === 0
+		const isLast = mod === WIDTH - 1
 
-		if (mod === 0) toPrint.push(address(position) + ' ')
+		if (isFirst) toPrint.push(address(position) + ' ')
 
 		toPrint.push(colorHexTable[buffer[i]])
 
-		if (mod === WIDTH - 1) toPrint.push('\n')
+		if (isLast) toPrint.push('\n')
 	}
 	process.stdout.write(toPrint.join(''))
 }
 
-// read as chunks
+/**
+ * @description reads a chunk of data from a file descriptor
+ * @param {Integer} descriptor file descriptor
+ * @param {Buffer} buffer buffer to store result in
+ * @param {Integer} start start offset on file descriptor
+ * @param {Integer} length chunk length
+ */
 const readChunk = (descriptor, buffer, start, length) =>
 	new Promise((resolve, reject) => {
 		fs.read(descriptor, buffer, 0, length, start, (error, data) => {
@@ -63,25 +78,27 @@ const readChunk = (descriptor, buffer, start, length) =>
 	})
 
 // go!
-fs.stat(FILE, (error, stat) => {
-	const chunks = Math.ceil(stat.size / CHUNK_SIZE)
+fs.stat(FILE, (error, { size }) => {
+	const totalChunks = Math.ceil(size / CHUNK_SIZE)
+
+	// open file
 	fs.open(FILE, 'r', async (error, descriptor) => {
-		const buffer = Buffer.alloc(CHUNK_SIZE)
-		for (let i = 0; i < chunks; i++) {
-			if ((i + 1) * CHUNK_SIZE <= stat.size) {
-				await readChunk(descriptor, buffer, i * CHUNK_SIZE, CHUNK_SIZE)
-				print(buffer, i * CHUNK_SIZE)
-			} else {
-				const buffer = Buffer.alloc(stat.size - i * CHUNK_SIZE)
-				await readChunk(
-					descriptor,
-					buffer,
-					i * CHUNK_SIZE,
-					stat.size - i * CHUNK_SIZE
-				)
-				print(buffer, i * CHUNK_SIZE)
-			}
+		// HACK: don't allocate first buffer outside of loop
+		let buffer = {}
+
+		for (let i = 0; i < totalChunks; i++) {
+			const offset = i * CHUNK_SIZE
+
+			// determine length to read
+			const length = Math.min(CHUNK_SIZE, size - offset)
+
+			// resize buffer if necessary
+			if (length !== buffer.length) buffer = Buffer.alloc(length)
+
+			// read & print
+			await readChunk(descriptor, buffer, offset, length)
+			printChunk(buffer, offset)
 		}
-		console.log()
+		process.stdout.write('\n')
 	})
 })
